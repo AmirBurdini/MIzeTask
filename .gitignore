@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+.superpowers/
+data/
+*.db
+*.db-wal
+*.db-shm
