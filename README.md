@@ -1,32 +1,6 @@
 # Supplier Feed Throttle & Dedup Service
-
-ASP.NET Core (.NET 9) Web API with SQLite (WAL) and Dapper (POCOs, hand-written SQL, no ORM). Suppliers push reservation
-updates; the service drops exact duplicates, applies real changes, ignores stale ones, and rate-limits each supplier.
 Specs: `docs/superpowers/specs/` (design), `docs/superpowers/plans/` (plan). The chat transcript is exported in the repo root.
 The DB defaults to `data/supplierfeed.db` (working directory); override with `Database__Path`.
-
-## Endpoints
-- `POST /api/reservations/ingest`: 201 `created`, 200 `updated` / `unchanged` / `stale`, 400 invalid, 413 body > 64 KB, 429 throttled.
-- `GET /api/reservations/stats/{supplierId}`: `{ supplierId, ingested, throttled }`; 503 if the database file is missing.
-
-## Design
-```
-ReservationsController -> IngestRequestParser -> IngestRequestValidator -> IngestService -> ThrottleLog / ReservationStore / StatsCounters
-StatsController        -> StatsQuery (read-only connection)
-```
-Controllers hold no SQL or rules. Writes (`Ingest/`) and reads (`Stats/`) are separate classes over the same SQLite file.
-Tables: `reservations` (PK supplierId+reservationId), `request_log` (the throttle window), `supplier_stats` (lifetime counters).
-
-Each ingest request:
-1. Read the raw body (capped at 64 KB) and parse it field by field. Extract `supplierId`; with none, return 400 (not throttled).
-2. Validate in memory, holding no lock.
-3. One write-locked transaction (`BEGIN IMMEDIATE`), always committed: take the clock, prune expired log rows, insert this request,
-   count the supplier's rows newer than `now - 60 s`. More than 100 -> bump `throttled`, return 429. Validation failed -> 400.
-   Otherwise read the stored row and decide: none -> insert (`created`); stored timestamp newer -> `stale`; identical -> `unchanged`;
-   else update (`updated`). `ingested` is bumped for created/updated only (`n = n + 1` in SQL).
-
-Multi-instance correctness comes from the database, not memory: every instance serialises on SQLite's write lock, so the
-count-then-act sequence can't interleave and the 101st request can't slip through.
 
 ## Tradeoffs
 - **Sliding-window log over a token bucket.** Exact "100 in any rolling 60 s"; a bucket admits ~200 in one window. Costs one row per request.
@@ -43,20 +17,17 @@ count-then-act sequence can't interleave and the 101st request can't slip throug
 - **Tests:** concurrency is tested with in-process hosts sharing one file (fast, deterministic clock), plus a script with real processes.
 
 ## Ambiguity decisions
-Decided by the author: .NET 9 + SQLite + Dapper; "multiple instances" = several processes on one machine sharing one SQLite file;
-older `updatedAtUtc` is not applied, equal is applied; validation = `checkIn < checkOut` and `price >= 0`; invalid requests count toward
-the limit but not as ingested; one project, separated by controllers and classes; no `Retry-After`; 64 KB cap (size arbitrary);
-price stored as float; a missing database returns a response rather than creating the file.
-
-Defaults Claude proposed, approved with the design doc:
-- Identity is `(supplierId, reservationId)`; `supplierId` is case-sensitive and never trimmed. One reservation per request.
+- Decided by the author: .NET 9 + SQLite + Dapper; "multiple instances" = several processes on one machine sharing one SQLite file;
+- "Multiple instances" = several processes on one machine sharing one SQLite file. SQLite can't span hosts (that needs SQL Server/Postgres), but all state lives in the database, so any instance can serve any request.
+- Validation not specified : older `updatedAtUtc` is not applied,`checkIn < checkOut` and `price >= 0`; invalid requests count toward the limit but not as ingested; 
+- one project, separated by controllers and classes; no Retry machenism; request body size capped at 64KB;
+- price stored as float; a missing database returns a response rather than creating the file.
 - A body with no usable `supplierId` (or invalid JSON) is a 400 and is never throttled: there is no key to count against.
 - Also require `supplierId`/`reservationId`/`roomId` to be non-blank; a wrong-typed or missing field is a 400.
 - Dates must be ISO-8601 (date, or date-time with `Z`, an offset, or none = UTC), normalised to UTC. A lenient parser accepted `"10:15"` as today's date.
 - A stale update returns 200 `stale` (not an error: retrying can't fix it). Duplicates and stale updates still count toward the limit.
 - `ingested` = created + updated; `throttled` = number of 429s; counters are lifetime; an unknown supplier returns zeroes.
 - 413 for oversize bodies (not throttled); 503 for a missing database or a lock held past the busy timeout.
-- SQLite can't be shared across hosts: a networked database (SQL Server/Postgres) is needed beyond one machine.
 
 ## Where the author changed Claude's suggestions
 - **Throttle:** the author proposed a token bucket (100, +1 per 10/6 s). Claude showed it admits ~200 per window and that unbounded
@@ -71,8 +42,7 @@ Defaults Claude proposed, approved with the design doc:
   checked by planting bugs and seeing them fail.
 
 ## With more time
-- Money as decimal/integer cents; normalise or reject odd supplier IDs (case, whitespace).
+- ditch SqlLite in favor of Postgrss(more suitable for concurrency)
 - A networked database with database-side time, and a multi-process test in CI.
-- `Retry-After`; cheaper blocked requests (rate-limit by IP before touching the DB); pruning off the hot path.
+- retry machenism for failed ingests
 - Auth, structured logging and metrics; reconsider last-arrival-wins on timestamp ties across instances.
-- A test that starts the app with no configuration override (a missing default once slipped past the automated tests).
