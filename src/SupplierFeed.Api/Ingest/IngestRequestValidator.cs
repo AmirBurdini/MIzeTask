@@ -9,19 +9,18 @@ public sealed class IngestRequestValidator
     {
         var errors = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(request.SupplierId))
-            errors.Add("supplierId is required and must be a non-blank string.");
+        // supplierId is not checked here: a request without one never reaches the validator.
         if (string.IsNullOrWhiteSpace(request.ReservationId))
             errors.Add("reservationId is required and must be a non-blank string.");
         if (string.IsNullOrWhiteSpace(request.RoomId))
             errors.Add("roomId is required and must be a non-blank string.");
 
         if (request.CheckIn is null)
-            errors.Add("checkIn is required and must be a date-time.");
+            errors.Add("checkIn is required and must be an ISO-8601 date-time (for example 2026-08-01T00:00:00Z).");
         if (request.CheckOut is null)
-            errors.Add("checkOut is required and must be a date-time.");
+            errors.Add("checkOut is required and must be an ISO-8601 date-time (for example 2026-08-01T00:00:00Z).");
         if (request.UpdatedAtUtc is null)
-            errors.Add("updatedAtUtc is required and must be a date-time.");
+            errors.Add("updatedAtUtc is required and must be an ISO-8601 date-time (for example 2026-08-01T00:00:00Z).");
         if (request.Price is null)
             errors.Add("price is required and must be a number.");
 

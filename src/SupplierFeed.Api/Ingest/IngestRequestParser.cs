@@ -20,6 +20,16 @@ public sealed class IngestRequestParser
 {
     private const DateTimeStyles UtcStyles = DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal;
 
+    // ISO-8601 only. A lenient parse would accept "10:15" (as today's date) or "7/1/2026" (day/month order
+    // depends on the culture). "K" accepts "Z", "+02:00" or no offset (treated as UTC).
+    private static readonly string[] IsoFormats =
+    {
+        "yyyy-MM-dd",
+        "yyyy-MM-dd'T'HH:mmK",
+        "yyyy-MM-dd'T'HH:mm:ssK",
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK"
+    };
+
     public ParsedIngest Parse(string body)
     {
         JsonDocument document;
@@ -42,7 +52,6 @@ public sealed class IngestRequestParser
 
             var request = new IngestRequest
             {
-                SupplierId = ReadString(root, "supplierId"),
                 ReservationId = ReadString(root, "reservationId"),
                 RoomId = ReadString(root, "roomId"),
                 CheckIn = ReadDate(root, "checkIn"),
@@ -51,8 +60,8 @@ public sealed class IngestRequestParser
                 UpdatedAtUtc = ReadDate(root, "updatedAtUtc")
             };
 
-            var supplierId = string.IsNullOrWhiteSpace(request.SupplierId) ? null : request.SupplierId;
-            return new ParsedIngest(supplierId, request);
+            var supplierId = ReadString(root, "supplierId");
+            return new ParsedIngest(string.IsNullOrWhiteSpace(supplierId) ? null : supplierId, request);
         }
     }
 
@@ -65,7 +74,7 @@ public sealed class IngestRequestParser
     {
         var text = ReadString(root, name);
         return text is not null
-               && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, UtcStyles, out var parsed)
+               && DateTimeOffset.TryParseExact(text, IsoFormats, CultureInfo.InvariantCulture, UtcStyles, out var parsed)
             ? parsed
             : null;
     }

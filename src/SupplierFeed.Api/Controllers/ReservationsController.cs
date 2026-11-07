@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using SupplierFeed.Api.Infrastructure;
 using SupplierFeed.Api.Ingest;
 using SupplierFeed.Api.Models;
 
@@ -24,8 +25,15 @@ public sealed class ReservationsController : ControllerBase
     public async Task<IActionResult> Ingest()
     {
         // Raw body, not model binding: the throttle must run before type validation.
-        using var reader = new StreamReader(Request.Body);
-        var body = await reader.ReadToEndAsync();
+        // Oversized bodies are rejected before parsing, so they are not throttled either.
+        var body = Request.ContentLength > BoundedBodyReader.MaxBodyBytes
+            ? null
+            : await BoundedBodyReader.ReadAsync(Request.Body, BoundedBodyReader.MaxBodyBytes, HttpContext.RequestAborted);
+        if (body is null)
+        {
+            return StatusCode(StatusCodes.Status413PayloadTooLarge,
+                new { error = $"Request body must not exceed {BoundedBodyReader.MaxBodyBytes} bytes." });
+        }
 
         var parsed = _parser.Parse(body);
         if (parsed.SupplierId is null || parsed.Request is null)

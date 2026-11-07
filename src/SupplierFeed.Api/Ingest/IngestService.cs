@@ -40,13 +40,16 @@ public sealed class IngestService : IIngestService
     public async Task<IngestResult> IngestAsync(
         string supplierId, IngestRequest request, IReadOnlyList<string> validationErrors)
     {
-        var now = _clock.UtcNow;
-
         using var connection = _connections.OpenWrite();
         // deferred: false = BEGIN IMMEDIATE. The write lock is taken up front, so the
         // read-then-write below cannot interleave with another instance. A deferred
         // transaction could fail on lock upgrade with a busy error that is not retried.
         using var transaction = connection.BeginTransaction(deferred: false);
+
+        // Read the clock only once the lock is held. A request can wait up to the busy timeout
+        // (30 s) for the lock; a time taken before the wait would be logged too early, so its
+        // row would expire from the window earlier than it should.
+        var now = _clock.UtcNow;
 
         var count = await _throttleLog.RecordAndCountAsync(connection, transaction, supplierId, now);
         if (count > ThrottleLog.MaxRequestsPerWindow)
